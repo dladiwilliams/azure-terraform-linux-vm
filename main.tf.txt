@@ -1,0 +1,164 @@
+terraform {
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 3.100"
+    }
+  }
+}
+
+provider "azurerm" {
+  features {}
+
+  subscription_id = "fbaf6f6a-89e4-439c-83ac-a9dcb8ef2104"
+}
+
+############################
+# COMMON TAGS (POLICY SAFE)
+############################
+locals {
+  common_tags = {
+    "az-104-mgdev" = "1"
+  }
+}
+
+############################
+# RESOURCE GROUP
+############################
+resource "azurerm_resource_group" "lab" {
+  name     = "rg-tf-lab-new"
+  location = "uksouth"
+
+  tags = local.common_tags
+}
+
+############################
+# VIRTUAL NETWORK
+############################
+resource "azurerm_virtual_network" "vnet" {
+  name                = "vnet-tf-lab-new"
+  address_space       = ["10.10.0.0/16"]
+  location            = azurerm_resource_group.lab.location
+  resource_group_name = azurerm_resource_group.lab.name
+
+  tags = local.common_tags
+}
+
+############################
+# SUBNET
+############################
+resource "azurerm_subnet" "subnet" {
+  name                 = "subnet-tf-lab-new"
+  resource_group_name  = azurerm_resource_group.lab.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = ["10.10.1.0/24"]
+}
+
+############################
+# NETWORK SECURITY GROUP
+############################
+resource "azurerm_network_security_group" "nsg" {
+  name                = "nsg-tf-lab-new"
+  location            = azurerm_resource_group.lab.location
+  resource_group_name = azurerm_resource_group.lab.name
+
+  security_rule {
+    name                       = "Allow-SSH"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range           = "*"
+    destination_port_range      = "22"
+    source_address_prefix       = "*"
+    destination_address_prefix  = "*"
+  }
+
+  tags = local.common_tags
+}
+
+############################
+# SUBNET NSG ASSOCIATION
+############################
+resource "azurerm_subnet_network_security_group_association" "subnet_nsg" {
+  subnet_id                 = azurerm_subnet.subnet.id
+  network_security_group_id = azurerm_network_security_group.nsg.id
+}
+
+############################
+# PUBLIC IP
+############################
+resource "azurerm_public_ip" "pubip" {
+  name                = "pubip-tf-lab-new"
+  location            = azurerm_resource_group.lab.location
+  resource_group_name = azurerm_resource_group.lab.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+
+  tags = local.common_tags
+}
+
+############################
+# NETWORK INTERFACE (TAGGED!)
+############################
+resource "azurerm_network_interface" "nic" {
+  name                = "nic-tf-lab-new"
+  location            = azurerm_resource_group.lab.location
+  resource_group_name = azurerm_resource_group.lab.name
+
+  ip_configuration {
+    name                          = "ipconfig1"
+    subnet_id                     = azurerm_subnet.subnet.id
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = azurerm_public_ip.pubip.id
+  }
+
+  tags = local.common_tags
+}
+
+############################
+# LINUX VIRTUAL MACHINE
+############################
+resource "azurerm_linux_virtual_machine" "vm" {
+  name                = "vm-tf-lab-new"
+  resource_group_name = azurerm_resource_group.lab.name
+  location            = azurerm_resource_group.lab.location
+  size                = "Standard_B1s"
+  admin_username      = "azureuser"
+
+  network_interface_ids = [
+    azurerm_network_interface.nic.id
+  ]
+
+  disable_password_authentication = true
+
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQC051FI4h0uIqoYZWG/jyGbJxOO6BDdqPMMXMmj1bp34T7rezt38RDt1E3TitaAJni0/752IFwjrxkGsMKMGZvk5bxSw9SRsZJVI8N2zny8q65PQF8le6RS8vgIxuXkg9WH16MQXqQmPRilTTB2wsx3qWPjfpKSrYQT+m1+PBkyMyhWuDOp1tXm9zS4ibAUnFRaJ8xpsbjcAva4w5FGMm1ZwnmwLDp0R95JzEy3uFOGmioTi/5jcUEb/Uo3N+74pMJXBbOcWIqO41WbBx2YE/HakgLe44eHCLgWxTJje+zwexWveqkEtd7NfD4/FsP0R9FjmKrTp2t01/5OWT1ovGni9IoHBZJvfgQPNrNQ55nkZBSM3vhyOnUOYEMZ4N/wsvwhI7ZRbzMI+vBkI5l8Q7v4RLDwbkqHmxbPZN0M7pB63PLblXOs1O0S/JOzjVq/eyDD+Q/wWaUjhdjWB1xREIWgGC8IHDIsZ1TG/L4GKPMTHRmkt48OkyvxAT/i7Gt3eGg3nbF1VoSx6M2o0Bw3w/jj/hjFhSoIoV92okj66k+1tKmPUcVz6p4jssLAv4q63upXgUBqRijcgbgbQgzT+XTyOaBB37oLO+n8i/nRtBm0nowxoGz0aVi7ssBFWdIST3lMCaDm0mY/Ey/1PQmjSZj1f6KcnOOZxEAW7HuJ/T+57w== azureuser@terravm"
+  }
+
+  os_disk {
+    name                 = "vm-tf-lab-new-osdisk"
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-focal"
+    sku       = "20_04-lts-gen2"
+    version   = "latest"
+  }
+
+  tags = local.common_tags
+}
+
+############################
+# OUTPUT
+############################
+output "vm_public_ip" {
+  value = azurerm_public_ip.pubip.ip_address
+}
+
+
+
